@@ -4,114 +4,129 @@
 #include <mfidl.h>
 #include <shlwapi.h>
 
-namespace ca { 
+namespace ca
+{
 
-  bool MediaFoundation_Callback::createInstance(MediaFoundation_Capture* cap, MediaFoundation_Callback** cb) {
+bool MediaFoundation_Callback::createInstance(MediaFoundation_Capture* cap, MediaFoundation_Callback** cb)
+{
+	if (cb == NULL)
+	{
+		printf("Error: the given MediaFoundation_Capture is invalid; cant create an instance.\n");
+		return false;
+	}
 
-    if(cb == NULL) {
-      printf("Error: the given MediaFoundation_Capture is invalid; cant create an instance.\n");
-      return false;
-    }
+	MediaFoundation_Callback* media_cb = new MediaFoundation_Callback(cap);
+	if (!media_cb)
+	{
+		printf("Error: cannot allocate a MediaFoundation_Callback object - out of memory\n");
+		return false;
+	}
 
-    MediaFoundation_Callback* media_cb = new MediaFoundation_Callback(cap);
-    if(!media_cb) {
-      printf("Error: cannot allocate a MediaFoundation_Callback object - out of memory\n");
-      return false;
-    }
-  
-    *cb = media_cb;
-    (*cb)->AddRef();
+	*cb = media_cb;
+	(*cb)->AddRef();
 
-    safeReleaseMediaFoundation(&media_cb); 
-    return true;
-  }
+	safeReleaseMediaFoundation(&media_cb);
+	return true;
+}
 
-  MediaFoundation_Callback::MediaFoundation_Callback(MediaFoundation_Capture* cap) 
-    :ref_count(1)
-    ,cap(cap)
-  {
-    InitializeCriticalSection(&crit_sec);
-  }
+MediaFoundation_Callback::MediaFoundation_Callback(MediaFoundation_Capture * cap): ref_count(1), cap(cap)
+{
+	InitializeCriticalSection(&crit_sec);
+}
 
-  MediaFoundation_Callback::~MediaFoundation_Callback() {
-  }
-  
-  HRESULT MediaFoundation_Callback::QueryInterface(REFIID iid, void** v) {
-    static const QITAB qit[] = {
-      QITABENT(MediaFoundation_Callback, IMFSourceReaderCallback), { 0 },
-    };
-    return QISearch(this, qit, iid, v);
-  }
+MediaFoundation_Callback::~MediaFoundation_Callback()
+{
+}
 
-  ULONG MediaFoundation_Callback::AddRef() {
-    return InterlockedIncrement(&ref_count);
-  }
+HRESULT MediaFoundation_Callback::QueryInterface(REFIID iid, void** v)
+{
+	static const QITAB qit[] =
+	{
+		QITABENT(MediaFoundation_Callback, IMFSourceReaderCallback),
+		{ 0 }
+	};
+	return QISearch(this, qit, iid, v);
+}
 
-  ULONG MediaFoundation_Callback::Release() {
-    ULONG ucount = InterlockedDecrement(&ref_count);
-    if(ucount == 0) {
-      delete this;
-    }
-    return ucount;
-  }
+ULONG MediaFoundation_Callback::AddRef()
+{
+	return InterlockedIncrement(&ref_count);
+}
 
-  HRESULT MediaFoundation_Callback::OnReadSample(HRESULT hr, DWORD streamIndex, DWORD streamFlags, LONGLONG timestamp, IMFSample* sample) {
-    assert(cap);
-    assert(cap->imf_source_reader);
-    assert(cap->cb_frame);
+ULONG MediaFoundation_Callback::Release()
+{
+	ULONG ucount = InterlockedDecrement(&ref_count);
+	if (ucount == 0)
+	{
+		delete this;
+	}
+	return ucount;
+}
 
-    EnterCriticalSection(&crit_sec);
+HRESULT MediaFoundation_Callback::OnReadSample(HRESULT hr, DWORD streamIndex, DWORD streamFlags, LONGLONG timestamp, IMFSample* sample)
+{
+	assert(cap);
+	assert(cap->imf_source_reader);
+	assert(cap->cb_frame);
 
-    if(SUCCEEDED(hr) && sample) {
+	EnterCriticalSection(&crit_sec);
 
-      IMFMediaBuffer* buffer;
-      HRESULT hr = S_OK;
-      DWORD count = 0;
-      sample->GetBufferCount(&count);
+	if (SUCCEEDED(hr) && sample)
+	{
 
-      for(DWORD i = 0; i < count; ++i) {
+		IMFMediaBuffer* buffer;
+		HRESULT hr = S_OK;
+		DWORD count = 0;
+		sample->GetBufferCount(& count);
 
-        hr = sample->GetBufferByIndex(i, &buffer);
+		for (DWORD i = 0; i < count; ++i)
+		{
 
-        
-        if(SUCCEEDED(hr)) {
-       
-          DWORD length = 0;
-          DWORD max_length = 0;
-          BYTE* data = NULL;
-          buffer->Lock(&data, &max_length, &length);
-          
-          cap->pixel_buffer.nbytes = (size_t)length;
-          cap->pixel_buffer.plane[0] = data;
-          cap->pixel_buffer.plane[1] = data + cap->pixel_buffer.offset[1];
-          cap->pixel_buffer.plane[2] = data + cap->pixel_buffer.offset[2];
-          cap->cb_frame(cap->pixel_buffer);
+			hr = sample->GetBufferByIndex(i, &buffer);
 
-          buffer->Unlock();
-          buffer->Release();
-        }
-      }
-    }
+			if (SUCCEEDED(hr))
+			{
+				DWORD length = 0;
+				DWORD max_length = 0;
+				BYTE* data = NULL;
+				buffer->Lock(&data, &max_length, &length);
 
-    if(SUCCEEDED(hr)) {
-      if(cap->imf_source_reader && cap->state & CA_STATE_CAPTUREING) {
-        hr = cap->imf_source_reader->ReadSample(MF_SOURCE_READER_FIRST_VIDEO_STREAM, 0, NULL, NULL, NULL, NULL);
-        if(FAILED(hr)) {
-          printf("Error: while trying to read the next sample.\n");
-        }
-      }
-    }
+				cap->pixel_buffer.nbytes = (size_t) length;
+				cap->pixel_buffer.plane[0] = data;
+				cap->pixel_buffer.plane[1] = data + cap->pixel_buffer.offset[1];
+				cap->pixel_buffer.plane[2] = data + cap->pixel_buffer.offset[2];
+				cap->cb_frame(cap->pixel_buffer, cap->cb_user);
 
-    LeaveCriticalSection(&crit_sec);
-    return S_OK;
-  }
+				buffer->Unlock();
+				buffer->Release();
+			}
+		}
+	}
 
-  HRESULT MediaFoundation_Callback::OnEvent(DWORD, IMFMediaEvent* event) {
-    return S_OK;
-  }
+	if (SUCCEEDED(hr))
+	{
+		if (cap->imf_source_reader && cap->state & CA_STATE_CAPTURING)
+		{
+			hr = cap->imf_source_reader->ReadSample(MF_SOURCE_READER_FIRST_VIDEO_STREAM, 0, NULL, NULL, NULL, NULL);
+			if (FAILED(hr))
+			{
+				printf("Error: while trying to read the next sample.\n");
+			}
+		}
+	}
 
-  HRESULT MediaFoundation_Callback::OnFlush(DWORD) {
-    return S_OK;
-  }
+	LeaveCriticalSection(&crit_sec);
+	return S_OK;
+}
+
+HRESULT MediaFoundation_Callback::OnEvent(DWORD, IMFMediaEvent* event)
+{
+	return S_OK;
+}
+
+HRESULT MediaFoundation_Callback::OnFlush(DWORD)
+{
+	return S_OK;
+}
 
 } // namespace ca
